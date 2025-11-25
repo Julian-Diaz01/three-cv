@@ -43,7 +43,6 @@ export default function Scene() {
         {/* 3D Objects - Rotation controlled by scroll */}
         <group position={[0, -2, 0]} scale={0.009}>
         <Suspense fallback={null}>
-          {/* Mouse Interaction Settings - Fully Configurable at Component Level */}
           <OBJWithParticles 
             modelPath="/cat.obj"
             particleColor="#00ffff"
@@ -53,11 +52,19 @@ export default function Scene() {
             showMesh={false}          
             rotation={modelRotation}   
             autoRotate={false}
-            interactive={true}              // Enable/disable mouse interaction
-            disperseRadius={7}             
-            disperseStrength={120}         
-            returnSpeed={1.0}               // Return animation speed (higher = faster/snappier, try 2-10)
-            waveAmplitude={1}             // Wave effect for organic feel (0 = none, 1 = strong)
+            interactive={true}
+            disperseRadius={7}
+            disperseStrength={120}
+            returnSpeed={1.0}
+            waveAmplitude={1}
+            use3DGradient={true}
+            gradientColors={[
+              { color: '#ff0000', position: [0, 0, 0] },      // Red - bottom-left-front
+              { color: '#00FF0D', position: [0, 1, 0] },      // Blue - top-left-front
+              { color: '#ff00ff', position: [0, 0, 1] },      // Magenta - bottom-left-back
+              { color: '#00ffff', position: [1, 0, 1] },      // Cyan - bottom-right-back
+            ]}
+            gradientBlendPower={2.0}
           />
         </Suspense>
         </group>

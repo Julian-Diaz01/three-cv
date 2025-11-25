@@ -1,41 +1,5 @@
 'use client'
 
-/**
- * Interactive Particle System
- * 
- * MOUSE INTERACTION CONTROLS:
- * ===========================
- * 
- * disperseRadius - Defines the AREA of mouse influence (in world space units)
- *   - Smaller values = mouse affects only nearby particles
- *   - Larger values = mouse affects particles from farther away
- *   - Example: disperseRadius={7} means particles within 7 units are affected
- * 
- * disperseStrength - How FAR particles move away from the mouse
- *   - Higher values = particles move farther
- *   - Lower values = subtle displacement
- *   - Example: disperseStrength={100} for strong displacement
- * 
- * returnSpeed - How FAST particles return to original position
- *   - Higher values (8-10) = snappy, quick return
- *   - Lower values (2-3) = slow, floaty return
- *   - Default: 5.0 for balanced physics
- * 
- * waveAmplitude - Adds organic WAVE motion to dispersal
- *   - 0 = no wave effect
- *   - 0.5 = subtle wave (default)
- *   - 1.0+ = strong wave pattern
- * 
- * Usage Example:
- * <OBJWithParticles 
- *   interactive={true}
- *   disperseRadius={7}        // ← CONTROLS MOUSE INTERACTION AREA
- *   disperseStrength={100}
- *   returnSpeed={5.0}
- *   waveAmplitude={0.5}
- * />
- */
-
 import { useRef, useEffect, useState, useMemo } from 'react'
 import { useFrame, useLoader, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
@@ -64,7 +28,13 @@ export function VertexParticles({
   disperseRadius = 2.0,
   disperseStrength = 1.5,
   returnSpeed = 3.0,
-  waveAmplitude = 0.3
+  waveAmplitude = 0.3,
+  use3DGradient = false,
+  gradientColorStart = '#ff0000',
+  gradientColorEnd = '#0000ff',
+  gradientAxis = 'y',
+  gradientColors = null,
+  gradientBlendPower = 2.0
 }: { 
   object: THREE.Object3D
   particleColor?: string
@@ -76,6 +46,12 @@ export function VertexParticles({
   disperseStrength?: number
   returnSpeed?: number
   waveAmplitude?: number
+  use3DGradient?: boolean
+  gradientColorStart?: string
+  gradientColorEnd?: string
+  gradientAxis?: 'x' | 'y' | 'z' | 'radial'
+  gradientColors?: Array<{ color: string; position: [number, number, number] }> | null
+  gradientBlendPower?: number
 }) {
   const pointsRef = useRef<THREE.Points>(null)
   const [geometry, setGeometry] = useState<THREE.BufferGeometry | null>(null)
@@ -138,6 +114,19 @@ export function VertexParticles({
 
     console.log(`Extracted ${positions.length / 3} vertices (sample rate: ${sampleRate})`)
 
+    // Calculate bounds for gradient
+    let minX = Infinity, minY = Infinity, minZ = Infinity
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity
+    
+    for (let i = 0; i < originalPositions.length; i += 3) {
+      minX = Math.min(minX, originalPositions[i])
+      maxX = Math.max(maxX, originalPositions[i])
+      minY = Math.min(minY, originalPositions[i + 1])
+      maxY = Math.max(maxY, originalPositions[i + 1])
+      minZ = Math.min(minZ, originalPositions[i + 2])
+      maxZ = Math.max(maxZ, originalPositions[i + 2])
+    }
+
     // Create a new geometry with the collected positions
     const particleGeometry = new THREE.BufferGeometry()
     particleGeometry.setAttribute(
@@ -149,6 +138,12 @@ export function VertexParticles({
       'originalPosition',
       new THREE.Float32BufferAttribute(originalPositions, 3)
     )
+    
+    // Store bounds as userData for use in material
+    particleGeometry.userData.bounds = {
+      min: new THREE.Vector3(minX, minY, minZ),
+      max: new THREE.Vector3(maxX, maxY, maxZ)
+    }
     
     // Initialize current displacement for smooth interpolation (all zeros initially)
     const displacements = new Float32Array(positions.length)
@@ -170,6 +165,36 @@ export function VertexParticles({
 
   // Create particle material with custom shader for glowing effect
   const particleMaterial = useMemo(() => {
+    // Get bounds from geometry if available
+    const bounds = geometry?.userData.bounds || {
+      min: new THREE.Vector3(-1, -1, -1),
+      max: new THREE.Vector3(1, 1, 1)
+    }
+    
+    // Convert gradient axis to number
+    const axisMap = { x: 0, y: 1, z: 2, radial: 3 }
+    const axisValue = axisMap[gradientAxis] || 1
+    
+    // Prepare multi-color gradient arrays
+    const useMultiColor = gradientColors !== null && gradientColors.length > 0
+    const colorArray = new Array(8).fill(0).flatMap(() => [1, 1, 1])
+    const positionArray = new Array(8).fill(0).flatMap(() => [0, 0, 0])
+    let colorCount = 0
+    
+    if (useMultiColor && gradientColors) {
+      colorCount = Math.min(gradientColors.length, 8)
+      for (let i = 0; i < colorCount; i++) {
+        const col = new THREE.Color(gradientColors[i].color)
+        colorArray[i * 3] = col.r
+        colorArray[i * 3 + 1] = col.g
+        colorArray[i * 3 + 2] = col.b
+        
+        positionArray[i * 3] = gradientColors[i].position[0]
+        positionArray[i * 3 + 1] = gradientColors[i].position[1]
+        positionArray[i * 3 + 2] = gradientColors[i].position[2]
+      }
+    }
+    
     const vertexShader = `
       uniform float time;
       uniform float size;
@@ -184,6 +209,7 @@ export function VertexParticles({
       attribute vec3 currentDisplacement;
       varying vec3 vColor;
       varying float vDistanceFromMouse;
+      varying vec3 vOriginalPosition;
       
       // Simple 3D noise function for organic movement
       float noise3D(vec3 p) {
@@ -203,6 +229,7 @@ export function VertexParticles({
       
       void main() {
         vColor = vec3(1.0);
+        vOriginalPosition = originalPosition;
         
         // Use the smoothly interpolated displacement from CPU
         vec3 pos = originalPosition + currentDisplacement;
@@ -235,9 +262,26 @@ export function VertexParticles({
     `
 
     const fragmentShader = `
+      #define MAX_GRADIENT_COLORS 8
+      
       uniform vec3 color;
+      uniform bool use3DGradient;
+      uniform vec3 gradientColorStart;
+      uniform vec3 gradientColorEnd;
+      uniform float gradientAxis;
+      uniform vec3 boundsMin;
+      uniform vec3 boundsMax;
+      
+      // Multi-color gradient uniforms
+      uniform bool useMultiColorGradient;
+      uniform int gradientColorCount;
+      uniform vec3 gradientColorArray[MAX_GRADIENT_COLORS];
+      uniform vec3 gradientPositionArray[MAX_GRADIENT_COLORS];
+      uniform float gradientBlendPower;
+      
       varying vec3 vColor;
       varying float vDistanceFromMouse;
+      varying vec3 vOriginalPosition;
       
       void main() {
         // Create circular particles
@@ -250,8 +294,72 @@ export function VertexParticles({
         float intensity = 1.0 - (dist * 2.0);
         intensity = pow(intensity, 2.0);
         
-        // Slight color shift when near mouse for extra visual feedback
-        vec3 finalColor = color * intensity;
+        vec3 finalColor = color;
+        
+        // Apply 3D gradient if enabled
+        if (use3DGradient) {
+          if (useMultiColorGradient && gradientColorCount > 0) {
+            // Multi-color gradient with distance-based blending
+            vec3 normalizedPos = (vOriginalPosition - boundsMin) / (boundsMax - boundsMin);
+            normalizedPos = clamp(normalizedPos, 0.0, 1.0);
+            
+            vec3 accumulatedColor = vec3(0.0);
+            float totalWeight = 0.0;
+            
+            // Calculate weighted blend of all colors based on distance
+            for (int i = 0; i < MAX_GRADIENT_COLORS; i++) {
+              if (i >= gradientColorCount) break;
+              
+              // Calculate distance from this color point
+              vec3 colorPos = gradientPositionArray[i];
+              float dist = length(normalizedPos - colorPos);
+              
+              // Inverse distance weighting with power for smoother/sharper blends
+              float weight = 1.0 / (pow(dist + 0.1, gradientBlendPower));
+              
+              accumulatedColor += gradientColorArray[i] * weight;
+              totalWeight += weight;
+            }
+            
+            // Normalize the color
+            if (totalWeight > 0.0) {
+              finalColor = accumulatedColor / totalWeight;
+            }
+          } else {
+            // Simple two-color gradient
+            float gradientFactor = 0.0;
+            
+            // Normalize position to 0-1 range based on bounds
+            vec3 normalizedPos = (vOriginalPosition - boundsMin) / (boundsMax - boundsMin);
+            normalizedPos = clamp(normalizedPos, 0.0, 1.0);
+            
+            // Choose gradient axis
+            if (gradientAxis < 0.5) {
+              // X axis
+              gradientFactor = normalizedPos.x;
+            } else if (gradientAxis < 1.5) {
+              // Y axis (vertical)
+              gradientFactor = normalizedPos.y;
+            } else if (gradientAxis < 2.5) {
+              // Z axis
+              gradientFactor = normalizedPos.z;
+            } else {
+              // Radial (from center)
+              vec3 center3d = (boundsMin + boundsMax) * 0.5;
+              float maxDist = length(boundsMax - boundsMin) * 0.5;
+              gradientFactor = length(vOriginalPosition - center3d) / maxDist;
+              gradientFactor = clamp(gradientFactor, 0.0, 1.0);
+            }
+            
+            // Smooth gradient interpolation
+            gradientFactor = smoothstep(0.0, 1.0, gradientFactor);
+            
+            // Mix colors
+            finalColor = mix(gradientColorStart, gradientColorEnd, gradientFactor);
+          }
+        }
+        
+        finalColor *= intensity;
         
         gl_FragColor = vec4(finalColor, intensity);
       }
@@ -269,13 +377,24 @@ export function VertexParticles({
         mousePos: { value: new THREE.Vector3(9999, 9999, 9999) },
         disperseRadius: { value: disperseRadius },
         disperseStrength: { value: disperseStrength },
-        waveAmplitude: { value: waveAmplitude }
+        waveAmplitude: { value: waveAmplitude },
+        use3DGradient: { value: use3DGradient },
+        gradientColorStart: { value: new THREE.Color(gradientColorStart) },
+        gradientColorEnd: { value: new THREE.Color(gradientColorEnd) },
+        gradientAxis: { value: axisValue },
+        boundsMin: { value: bounds.min },
+        boundsMax: { value: bounds.max },
+        useMultiColorGradient: { value: useMultiColor },
+        gradientColorCount: { value: colorCount },
+        gradientColorArray: { value: colorArray },
+        gradientPositionArray: { value: positionArray },
+        gradientBlendPower: { value: gradientBlendPower }
       },
       transparent: true,
       blending: THREE.AdditiveBlending,
       depthWrite: false
     })
-  }, [particleColor, particleSize, animated, interactive, disperseRadius, disperseStrength, waveAmplitude])
+  }, [particleColor, particleSize, animated, interactive, disperseRadius, disperseStrength, waveAmplitude, use3DGradient, gradientColorStart, gradientColorEnd, gradientAxis, gradientColors, gradientBlendPower, geometry])
 
   // Animation and mouse tracking update
   useFrame((state, delta) => {
@@ -391,7 +510,13 @@ export function OBJWithParticles({
   disperseRadius = 2.0,
   disperseStrength = 1.5,
   returnSpeed = 3.0,
-  waveAmplitude = 0.3
+  waveAmplitude = 0.3,
+  use3DGradient = false,
+  gradientColorStart = '#ff0000',
+  gradientColorEnd = '#0000ff',
+  gradientAxis = 'y',
+  gradientColors = null,
+  gradientBlendPower = 2.0
 }: { 
   modelPath: string
   particleColor?: string
@@ -409,6 +534,12 @@ export function OBJWithParticles({
   disperseStrength?: number
   returnSpeed?: number
   waveAmplitude?: number
+  use3DGradient?: boolean
+  gradientColorStart?: string
+  gradientColorEnd?: string
+  gradientAxis?: 'x' | 'y' | 'z' | 'radial'
+  gradientColors?: Array<{ color: string; position: [number, number, number] }> | null
+  gradientBlendPower?: number
 }) {
   const groupRef = useRef<THREE.Group>(null)
   const obj = useLoader(OBJLoader, modelPath)
@@ -457,6 +588,12 @@ export function OBJWithParticles({
         disperseStrength={disperseStrength}
         returnSpeed={returnSpeed}
         waveAmplitude={waveAmplitude}
+        use3DGradient={use3DGradient}
+        gradientColorStart={gradientColorStart}
+        gradientColorEnd={gradientColorEnd}
+        gradientAxis={gradientAxis}
+        gradientColors={gradientColors}
+        gradientBlendPower={gradientBlendPower}
       />
     </group>
   )
