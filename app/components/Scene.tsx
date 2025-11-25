@@ -4,30 +4,6 @@ import { useState, useEffect, Suspense, useRef } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei'
 import { OBJWithParticles, VertexParticles } from './LightArray'
-import * as THREE from 'three'
-
-// Component to display a cube with particles
-function CubeWithParticles() {
-  const meshRef = useRef<THREE.Mesh>(null)
-
-  return (
-    <group position={[3, 0, 0]}>
-      <mesh ref={meshRef}>
-        <boxGeometry args={[1, 1, 1]} />
-        <meshBasicMaterial visible={false} />
-      </mesh>
-      {meshRef.current && (
-        <VertexParticles
-          object={meshRef.current}
-          particleColor="#00ffff"
-          particleSize={0.05}
-          sampleRate={0.5}
-          animated={true}
-        />
-      )}
-    </group>
-  )
-}
 
 export default function Scene() {
   const [scrollY, setScrollY] = useState(0)
@@ -53,6 +29,7 @@ export default function Scene() {
       <Canvas>
         <PerspectiveCamera makeDefault position={[6, 5 , 7]} />
         <OrbitControls 
+          enabled={false}
           enableDamping 
           dampingFactor={0.05}
           target={[0, 0, 0]}
@@ -66,23 +43,24 @@ export default function Scene() {
         {/* 3D Objects - Rotation controlled by scroll */}
         <group position={[0, -2, 0]} scale={0.009}>
         <Suspense fallback={null}>
+          {/* Mouse Interaction Settings - Fully Configurable at Component Level */}
           <OBJWithParticles 
             modelPath="/cat.obj"
             particleColor="#00ffff"
-            particleSize={0.5}         
-            sampleRate={10}             // More particles (every 5th vertex)
+            particleSize={0.1}         
+            sampleRate={1}             
             animated={true}           
             showMesh={false}          
-            meshOpacity={0.2}
-            meshColor="#001a33"
             rotation={modelRotation}   
-            autoRotate={false}         
+            autoRotate={false}
+            interactive={true}              // Enable/disable mouse interaction
+            disperseRadius={7}             
+            disperseStrength={120}         
+            returnSpeed={1.0}               // Return animation speed (higher = faster/snappier, try 2-10)
+            waveAmplitude={1}             // Wave effect for organic feel (0 = none, 1 = strong)
           />
         </Suspense>
         </group>
- 
-        {/* Test cube with particles */}
-        <CubeWithParticles />
       </Canvas>
     </div>
   )
