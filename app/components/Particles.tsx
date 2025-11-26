@@ -15,11 +15,14 @@ interface ParticlesProps {
   disperseStrength?: number
   returnSpeed?: number
   use3DGradient?: boolean
-  gradientColors?: Array<{ color: string; position: [number, number, number] }>
+  gradientColors?: Array<{
+    color: string
+    position: [number, number, number]
+  }> | null
   gradientBlendPower?: number
 }
 
-export function Particles({ 
+export function Particles({
   object,
   color = '#00ffff',
   size = 0.02,
@@ -31,27 +34,38 @@ export function Particles({
   returnSpeed = 3.0,
   use3DGradient = false,
   gradientColors = null,
-  gradientBlendPower = 2.0
+  gradientBlendPower = 2.0,
 }: ParticlesProps) {
   const pointsRef = useRef<THREE.Points>(null)
   const [geometry, setGeometry] = useState<THREE.BufferGeometry | null>(null)
-  const { camera, size: canvasSize } = useThree()
+  const { camera, gl } = useThree()
   const mouseRef = useRef(new THREE.Vector2(9999, 9999))
   const mouse3DRef = useRef(new THREE.Vector3(9999, 9999, 9999))
   const velocitiesRef = useRef<Float32Array | null>(null)
-  const skinnedMeshesRef = useRef<Array<{ mesh: THREE.SkinnedMesh; indices: number[] }>>([])
+  const skinnedMeshesRef = useRef<
+    Array<{ mesh: THREE.SkinnedMesh; indices: number[] }>
+  >([])
 
   // Track mouse for interaction
   useEffect(() => {
     if (!interactive) return
 
     const handleMouseMove = (event: MouseEvent) => {
-      mouseRef.current.x = (event.clientX / canvasSize.width) * 2 - 1
-      mouseRef.current.y = -(event.clientY / canvasSize.height) * 2 + 1
+      // Get the canvas element's position and size
+      const canvas = gl.domElement
+      const rect = canvas.getBoundingClientRect()
+
+      // Calculate mouse position relative to the canvas
+      const x = event.clientX - rect.left
+      const y = event.clientY - rect.top
+
+      // Convert to normalized device coordinates (-1 to +1)
+      mouseRef.current.x = (x / rect.width) * 2 - 1
+      mouseRef.current.y = -(y / rect.height) * 2 + 1
 
       const raycaster = new THREE.Raycaster()
       raycaster.setFromCamera(mouseRef.current, camera)
-      
+
       const distance = 7
       const direction = raycaster.ray.direction.clone().multiplyScalar(distance)
       mouse3DRef.current.copy(camera.position).add(direction)
@@ -59,7 +73,7 @@ export function Particles({
 
     window.addEventListener('mousemove', handleMouseMove)
     return () => window.removeEventListener('mousemove', handleMouseMove)
-  }, [interactive, camera, canvasSize])
+  }, [interactive, camera, gl])
 
   // Extract vertices from object
   useEffect(() => {
@@ -67,27 +81,34 @@ export function Particles({
 
     const positions: number[] = []
     const originalPositions: number[] = []
-    const skinnedMeshData: Array<{ mesh: THREE.SkinnedMesh; indices: number[] }> = []
+    const skinnedMeshData: Array<{
+      mesh: THREE.SkinnedMesh
+      indices: number[]
+    }> = []
     let particleIndex = 0
-    
+
     object.traverse((child) => {
       if (child instanceof THREE.Mesh && child.geometry) {
         const positionAttribute = child.geometry.attributes.position
-        
+
         if (positionAttribute) {
           const posArray = positionAttribute.array
           const meshIndices: number[] = []
-          
+
           for (let i = 0; i < posArray.length; i += 3 * sampleRate) {
             positions.push(posArray[i], posArray[i + 1], posArray[i + 2])
-            originalPositions.push(posArray[i], posArray[i + 1], posArray[i + 2])
-            
+            originalPositions.push(
+              posArray[i],
+              posArray[i + 1],
+              posArray[i + 2],
+            )
+
             if (child instanceof THREE.SkinnedMesh) {
               meshIndices.push(particleIndex)
             }
             particleIndex++
           }
-          
+
           if (child instanceof THREE.SkinnedMesh && meshIndices.length > 0) {
             skinnedMeshData.push({ mesh: child, indices: meshIndices })
           }
@@ -98,9 +119,13 @@ export function Particles({
     skinnedMeshesRef.current = skinnedMeshData
 
     // Calculate bounds for gradient
-    let minX = Infinity, minY = Infinity, minZ = Infinity
-    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity
-    
+    let minX = Infinity,
+      minY = Infinity,
+      minZ = Infinity
+    let maxX = -Infinity,
+      maxY = -Infinity,
+      maxZ = -Infinity
+
     for (let i = 0; i < originalPositions.length; i += 3) {
       minX = Math.min(minX, originalPositions[i])
       maxX = Math.max(maxX, originalPositions[i])
@@ -111,16 +136,25 @@ export function Particles({
     }
 
     const particleGeometry = new THREE.BufferGeometry()
-    particleGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-    particleGeometry.setAttribute('originalPosition', new THREE.Float32BufferAttribute(originalPositions, 3))
+    particleGeometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute(positions, 3),
+    )
+    particleGeometry.setAttribute(
+      'originalPosition',
+      new THREE.Float32BufferAttribute(originalPositions, 3),
+    )
     particleGeometry.userData.bounds = {
       min: new THREE.Vector3(minX, minY, minZ),
-      max: new THREE.Vector3(maxX, maxY, maxZ)
+      max: new THREE.Vector3(maxX, maxY, maxZ),
     }
-    
+
     const displacements = new Float32Array(positions.length)
-    particleGeometry.setAttribute('currentDisplacement', new THREE.BufferAttribute(displacements, 3))
-    
+    particleGeometry.setAttribute(
+      'currentDisplacement',
+      new THREE.BufferAttribute(displacements, 3),
+    )
+
     velocitiesRef.current = new Float32Array(positions.length)
     setGeometry(particleGeometry)
 
@@ -134,15 +168,16 @@ export function Particles({
   const particleMaterial = useMemo(() => {
     const bounds = geometry?.userData.bounds || {
       min: new THREE.Vector3(-1, -1, -1),
-      max: new THREE.Vector3(1, 1, 1)
+      max: new THREE.Vector3(1, 1, 1),
     }
-    
-    const useMultiColor = gradientColors !== null && gradientColors && gradientColors.length > 0
+
+    const useMultiColor =
+      gradientColors !== null && gradientColors && gradientColors.length > 0
     const maxColors = 8
     const colorArray: number[] = []
     const positionArray: number[] = []
     let colorCount = 0
-    
+
     if (useMultiColor && gradientColors) {
       colorCount = Math.min(gradientColors.length, maxColors)
       for (let i = 0; i < colorCount; i++) {
@@ -158,7 +193,7 @@ export function Particles({
         positionArray.push(0)
       }
     }
-    
+
     return new THREE.ShaderMaterial({
       vertexShader: `
         uniform float time;
@@ -276,156 +311,182 @@ export function Particles({
         gradientColorCount: { value: colorCount },
         gradientColorArray: { value: colorArray },
         gradientPositionArray: { value: positionArray },
-        gradientBlendPower: { value: gradientBlendPower }
+        gradientBlendPower: { value: gradientBlendPower },
       },
       transparent: true,
       blending: THREE.AdditiveBlending,
-      depthWrite: false
+      depthWrite: false,
     })
-  }, [color, size, animated, interactive, disperseRadius, disperseStrength, use3DGradient, gradientColors, gradientBlendPower, geometry])
+  }, [
+    color,
+    size,
+    animated,
+    interactive,
+    disperseRadius,
+    disperseStrength,
+    use3DGradient,
+    gradientColors,
+    gradientBlendPower,
+    geometry,
+  ])
 
   // Animation loop
   useFrame((state, delta) => {
     if (animated && particleMaterial.uniforms.time) {
       particleMaterial.uniforms.time.value += delta
     }
-    
+
     if (interactive && particleMaterial.uniforms.mousePos) {
       particleMaterial.uniforms.mousePos.value.copy(mouse3DRef.current)
     }
-    
+
     // Update particle positions from skinned mesh animation
     if (geometry && skinnedMeshesRef.current.length > 0 && pointsRef.current) {
       const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute
-      const originalPosAttr = geometry.getAttribute('originalPosition') as THREE.BufferAttribute
-      
+      const originalPosAttr = geometry.getAttribute(
+        'originalPosition',
+      ) as THREE.BufferAttribute
+
       if (posAttr && originalPosAttr) {
         const vertex = new THREE.Vector3()
         const temp = new THREE.Vector3()
         const skinned = new THREE.Vector3()
         const inverseMatrix = new THREE.Matrix4()
         inverseMatrix.copy(pointsRef.current.matrixWorld).invert()
-        
+
         for (const { mesh, indices } of skinnedMeshesRef.current) {
           const meshPosAttr = mesh.geometry.attributes.position
           const skinIndexAttr = mesh.geometry.attributes.skinIndex
           const skinWeightAttr = mesh.geometry.attributes.skinWeight
-          
+
           if (mesh.skeleton) {
             mesh.skeleton.update()
           }
-          
+
           for (let i = 0; i < indices.length; i++) {
             const particleIdx = indices[i]
             const vertexIdx = i * sampleRate
-            
+
             if (vertexIdx * 3 + 2 < meshPosAttr.array.length) {
               vertex.fromBufferAttribute(meshPosAttr, vertexIdx)
-              
+
               if (skinIndexAttr && skinWeightAttr && mesh.skeleton) {
                 skinned.set(0, 0, 0)
-                
+
                 const boneIndices = [
                   Math.floor(skinIndexAttr.getX(vertexIdx)),
                   Math.floor(skinIndexAttr.getY(vertexIdx)),
                   Math.floor(skinIndexAttr.getZ(vertexIdx)),
-                  Math.floor(skinIndexAttr.getW(vertexIdx))
+                  Math.floor(skinIndexAttr.getW(vertexIdx)),
                 ]
                 const weights = [
                   skinWeightAttr.getX(vertexIdx),
                   skinWeightAttr.getY(vertexIdx),
                   skinWeightAttr.getZ(vertexIdx),
-                  skinWeightAttr.getW(vertexIdx)
+                  skinWeightAttr.getW(vertexIdx),
                 ]
-                
+
                 for (let j = 0; j < 4; j++) {
-                  if (weights[j] > 0 && boneIndices[j] < mesh.skeleton.bones.length) {
+                  if (
+                    weights[j] > 0 &&
+                    boneIndices[j] < mesh.skeleton.bones.length
+                  ) {
                     const bone = mesh.skeleton.bones[boneIndices[j]]
                     temp.copy(vertex)
-                    temp.applyMatrix4(mesh.skeleton.boneInverses[boneIndices[j]])
+                    temp.applyMatrix4(
+                      mesh.skeleton.boneInverses[boneIndices[j]],
+                    )
                     temp.applyMatrix4(bone.matrixWorld)
                     temp.multiplyScalar(weights[j])
                     skinned.add(temp)
                   }
                 }
-                
+
                 vertex.copy(skinned)
               } else {
                 vertex.applyMatrix4(mesh.matrixWorld)
               }
-              
+
               vertex.applyMatrix4(inverseMatrix)
-              
+
               const idx = particleIdx * 3
               posAttr.array[idx] = vertex.x
               posAttr.array[idx + 1] = vertex.y
               posAttr.array[idx + 2] = vertex.z
-              
+
               originalPosAttr.array[idx] = vertex.x
               originalPosAttr.array[idx + 1] = vertex.y
               originalPosAttr.array[idx + 2] = vertex.z
             }
           }
         }
-        
+
         posAttr.needsUpdate = true
         originalPosAttr.needsUpdate = true
       }
     }
-    
+
     // Smooth particle displacement with physics
     if (interactive && geometry && velocitiesRef.current && pointsRef.current) {
-      const displacementAttr = geometry.getAttribute('currentDisplacement') as THREE.BufferAttribute
-      const originalPosAttr = geometry.getAttribute('originalPosition') as THREE.BufferAttribute
+      const displacementAttr = geometry.getAttribute(
+        'currentDisplacement',
+      ) as THREE.BufferAttribute
+      const originalPosAttr = geometry.getAttribute(
+        'originalPosition',
+      ) as THREE.BufferAttribute
       const velocities = velocitiesRef.current
-      
+
       if (displacementAttr && originalPosAttr) {
         const mousePos = mouse3DRef.current
         const springStrength = returnSpeed
         const damping = 0.8
-        
+
         for (let i = 0; i < displacementAttr.count; i++) {
           const idx = i * 3
-          
+
           const ox = originalPosAttr.array[idx]
           const oy = originalPosAttr.array[idx + 1]
           const oz = originalPosAttr.array[idx + 2]
-          
+
           const worldPos = new THREE.Vector3(ox, oy, oz)
           worldPos.applyMatrix4(pointsRef.current.matrixWorld)
-          
+
           const dist = worldPos.distanceTo(mousePos)
-          
-          let targetX = 0, targetY = 0, targetZ = 0
-          
+
+          let targetX = 0,
+            targetY = 0,
+            targetZ = 0
+
           if (dist < disperseRadius) {
-            const direction = new THREE.Vector3().subVectors(worldPos, mousePos).normalize()
-            const influence = Math.pow(1.0 - (dist / disperseRadius), 2)
+            const direction = new THREE.Vector3()
+              .subVectors(worldPos, mousePos)
+              .normalize()
+            const influence = Math.pow(1.0 - dist / disperseRadius, 2)
             const time = state.clock.elapsedTime
             const noise = Math.sin(ox * 0.1 + time) * 0.3
-            
+
             targetX = direction.x * influence * disperseStrength * (1 + noise)
             targetY = direction.y * influence * disperseStrength * (1 + noise)
             targetZ = direction.z * influence * disperseStrength * (1 + noise)
           }
-          
+
           const currentX = displacementAttr.array[idx]
           const currentY = displacementAttr.array[idx + 1]
           const currentZ = displacementAttr.array[idx + 2]
-          
+
           velocities[idx] += (targetX - currentX) * springStrength * delta
           velocities[idx + 1] += (targetY - currentY) * springStrength * delta
           velocities[idx + 2] += (targetZ - currentZ) * springStrength * delta
-          
+
           velocities[idx] *= damping
           velocities[idx + 1] *= damping
           velocities[idx + 2] *= damping
-          
+
           displacementAttr.array[idx] += velocities[idx] * delta * 60
           displacementAttr.array[idx + 1] += velocities[idx + 1] * delta * 60
           displacementAttr.array[idx + 2] += velocities[idx + 2] * delta * 60
         }
-        
+
         displacementAttr.needsUpdate = true
       }
     }
@@ -439,6 +500,7 @@ export function Particles({
 
   if (!geometry) return null
 
-  return <points ref={pointsRef} geometry={geometry} material={particleMaterial} />
+  return (
+    <points ref={pointsRef} geometry={geometry} material={particleMaterial} />
+  )
 }
-

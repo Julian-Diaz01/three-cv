@@ -23,13 +23,16 @@ interface ModelProps {
   disperseStrength?: number
   returnSpeed?: number
   use3DGradient?: boolean
-  gradientColors?: Array<{ color: string; position: [number, number, number] }>
+  gradientColors?: Array<{
+    color: string
+    position: [number, number, number]
+  }> | null
   gradientBlendPower?: number
   playAnimation?: boolean
   animationIndex?: number
 }
 
-export function Model({ 
+export function Model({
   modelPath,
   particleColor = '#00ffff',
   particleSize = 0.03,
@@ -49,12 +52,12 @@ export function Model({
   gradientColors = null,
   gradientBlendPower = 2.0,
   playAnimation = true,
-  animationIndex = 0
+  animationIndex = 0,
 }: ModelProps) {
   const groupRef = useRef<THREE.Group>(null)
   const mixerRef = useRef<THREE.AnimationMixer | null>(null)
   const gltf = useLoader(GLTFLoader, modelPath)
-  
+
   // Apply material to mesh
   useEffect(() => {
     if (gltf && showMesh) {
@@ -62,7 +65,7 @@ export function Model({
         color: meshColor,
         transparent: meshOpacity < 1,
         opacity: meshOpacity,
-        side: THREE.DoubleSide
+        side: THREE.DoubleSide,
       })
 
       gltf.scene.traverse((child) => {
@@ -90,7 +93,7 @@ export function Model({
       const clipIndex = Math.min(animationIndex, gltf.animations.length - 1)
       const clip = gltf.animations[clipIndex]
       const action = mixer.clipAction(clip)
-      
+
       action.play()
 
       return () => {
@@ -121,9 +124,9 @@ export function Model({
   return (
     <group ref={groupRef}>
       {showMesh && <primitive object={gltf.scene} />}
-      <Particles 
+      <Particles
         object={gltf.scene}
-        color={particleColor} 
+        color={particleColor}
         size={particleSize}
         sampleRate={sampleRate}
         animated={animated}
@@ -138,4 +141,3 @@ export function Model({
     </group>
   )
 }
-
