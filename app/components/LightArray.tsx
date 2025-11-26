@@ -3,8 +3,7 @@
 import { useRef, useEffect, useState, useMemo } from 'react'
 import { useFrame, useLoader, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
-import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
-import { createLightArrayMaterial, updateShaderTime, useSpecialMaterial } from '../hooks/useSpecialMaterial'
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { applyMaterialToObject } from '../hooks/useTexturedMaterial'
 
 
@@ -59,6 +58,7 @@ export function VertexParticles({
   const mouseRef = useRef(new THREE.Vector2(9999, 9999)) // Start offscreen
   const mouse3DRef = useRef(new THREE.Vector3(9999, 9999, 9999))
   const velocitiesRef = useRef<Float32Array | null>(null)
+  const skinnedMeshesRef = useRef<Array<{ mesh: THREE.SkinnedMesh; indices: number[] }>>([])
 
   // Mouse tracking for interactive mode
   useEffect(() => {
@@ -89,6 +89,8 @@ export function VertexParticles({
 
     const positions: number[] = []
     const originalPositions: number[] = [] // Store original positions for restoration
+    const skinnedMeshData: Array<{ mesh: THREE.SkinnedMesh; indices: number[] }> = []
+    let particleIndex = 0
     
     // Traverse the object and collect all vertex positions
     object.traverse((child) => {
@@ -98,6 +100,7 @@ export function VertexParticles({
         
         if (positionAttribute) {
           const posArray = positionAttribute.array
+          const meshIndices: number[] = []
           
           // Sample vertices based on sampleRate
           for (let i = 0; i < posArray.length; i += 3 * sampleRate) {
@@ -107,10 +110,27 @@ export function VertexParticles({
             
             positions.push(x, y, z)
             originalPositions.push(x, y, z)
+            
+            // Track which particle index corresponds to which vertex
+            if (child instanceof THREE.SkinnedMesh) {
+              meshIndices.push(particleIndex)
+            }
+            particleIndex++
+          }
+          
+          // Store skinned mesh reference and its particle indices
+          if (child instanceof THREE.SkinnedMesh && meshIndices.length > 0) {
+            skinnedMeshData.push({
+              mesh: child,
+              indices: meshIndices
+            })
           }
         }
       }
     })
+
+    skinnedMeshesRef.current = skinnedMeshData
+    console.log(`Extracted ${positions.length / 3} vertices (sample rate: ${sampleRate}), ${skinnedMeshData.length} skinned meshes`)
 
     console.log(`Extracted ${positions.length / 3} vertices (sample rate: ${sampleRate})`)
 
@@ -175,23 +195,32 @@ export function VertexParticles({
     const axisMap = { x: 0, y: 1, z: 2, radial: 3 }
     const axisValue = axisMap[gradientAxis] || 1
     
-    // Prepare multi-color gradient arrays
-    const useMultiColor = gradientColors !== null && gradientColors.length > 0
-    const colorArray = new Array(8).fill(0).flatMap(() => [1, 1, 1])
-    const positionArray = new Array(8).fill(0).flatMap(() => [0, 0, 0])
+    // Prepare multi-color gradient data
+    const useMultiColor = gradientColors !== null && gradientColors && gradientColors.length > 0
+    const maxColors = 8
+    const colorArray: number[] = []
+    const positionArray: number[] = []
     let colorCount = 0
     
     if (useMultiColor && gradientColors) {
-      colorCount = Math.min(gradientColors.length, 8)
+      colorCount = Math.min(gradientColors.length, maxColors)
       for (let i = 0; i < colorCount; i++) {
         const col = new THREE.Color(gradientColors[i].color)
-        colorArray[i * 3] = col.r
-        colorArray[i * 3 + 1] = col.g
-        colorArray[i * 3 + 2] = col.b
-        
-        positionArray[i * 3] = gradientColors[i].position[0]
-        positionArray[i * 3 + 1] = gradientColors[i].position[1]
-        positionArray[i * 3 + 2] = gradientColors[i].position[2]
+        colorArray.push(col.r, col.g, col.b)
+        positionArray.push(...gradientColors[i].position)
+      }
+      // Pad arrays to maxColors
+      while (colorArray.length < maxColors * 3) {
+        colorArray.push(1, 1, 1)
+      }
+      while (positionArray.length < maxColors * 3) {
+        positionArray.push(0, 0, 0)
+      }
+    } else {
+      // Fill with defaults
+      for (let i = 0; i < maxColors * 3; i++) {
+        colorArray.push(1)
+        positionArray.push(0)
       }
     }
     
@@ -310,11 +339,12 @@ export function VertexParticles({
             for (int i = 0; i < MAX_GRADIENT_COLORS; i++) {
               if (i >= gradientColorCount) break;
               
-              // Calculate distance from this color point
+              // Calculate distance from this color point in normalized space
               vec3 colorPos = gradientPositionArray[i];
               float dist = length(normalizedPos - colorPos);
               
               // Inverse distance weighting with power for smoother/sharper blends
+              // Lower power (1-2) = smoother blends, Higher power (3-5) = sharper transitions
               float weight = 1.0 / (pow(dist + 0.1, gradientBlendPower));
               
               accumulatedColor += gradientColorArray[i] * weight;
@@ -407,6 +437,95 @@ export function VertexParticles({
       particleMaterial.uniforms.mousePos.value.copy(mouse3DRef.current)
     }
     
+    // Update particle positions to follow skinned mesh animation
+    if (geometry && skinnedMeshesRef.current.length > 0 && pointsRef.current) {
+      const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute
+      const originalPosAttr = geometry.getAttribute('originalPosition') as THREE.BufferAttribute
+      
+      if (posAttr && originalPosAttr) {
+        const vertex = new THREE.Vector3()
+        const temp = new THREE.Vector3()
+        const skinned = new THREE.Vector3()
+        const inverseMatrix = new THREE.Matrix4()
+        inverseMatrix.copy(pointsRef.current.matrixWorld).invert()
+        
+        // Update positions from skinned meshes
+        for (const { mesh, indices } of skinnedMeshesRef.current) {
+          const meshPosAttr = mesh.geometry.attributes.position
+          const skinIndexAttr = mesh.geometry.attributes.skinIndex
+          const skinWeightAttr = mesh.geometry.attributes.skinWeight
+          
+          // Update skeleton matrices
+          if (mesh.skeleton) {
+            mesh.skeleton.update()
+          }
+          
+          for (let i = 0; i < indices.length; i++) {
+            const particleIdx = indices[i]
+            const vertexIdx = i * sampleRate // Account for sample rate
+            
+            if (vertexIdx * 3 + 2 < meshPosAttr.array.length) {
+              // Get vertex in local mesh space
+              vertex.fromBufferAttribute(meshPosAttr, vertexIdx)
+              
+              // Apply skinning if available
+              if (skinIndexAttr && skinWeightAttr && mesh.skeleton) {
+                skinned.set(0, 0, 0)
+                
+                // Get skin indices and weights for this vertex
+                const indices = [
+                  Math.floor(skinIndexAttr.getX(vertexIdx)),
+                  Math.floor(skinIndexAttr.getY(vertexIdx)),
+                  Math.floor(skinIndexAttr.getZ(vertexIdx)),
+                  Math.floor(skinIndexAttr.getW(vertexIdx))
+                ]
+                const weights = [
+                  skinWeightAttr.getX(vertexIdx),
+                  skinWeightAttr.getY(vertexIdx),
+                  skinWeightAttr.getZ(vertexIdx),
+                  skinWeightAttr.getW(vertexIdx)
+                ]
+                
+                // Apply bone transforms (up to 4 bones per vertex)
+                // Formula: skinnedVertex = sum(weight * boneMatrix * bindMatrixInverse * vertex)
+                for (let j = 0; j < 4; j++) {
+                  if (weights[j] > 0 && indices[j] < mesh.skeleton.bones.length) {
+                    const bone = mesh.skeleton.bones[indices[j]]
+                    temp.copy(vertex)
+                    temp.applyMatrix4(mesh.skeleton.boneInverses[indices[j]])
+                    temp.applyMatrix4(bone.matrixWorld)
+                    temp.multiplyScalar(weights[j])
+                    skinned.add(temp)
+                  }
+                }
+                
+                vertex.copy(skinned)
+              } else {
+                // No skinning, just apply mesh transform
+                vertex.applyMatrix4(mesh.matrixWorld)
+              }
+              
+              // Transform to particles' local space
+              vertex.applyMatrix4(inverseMatrix)
+              
+              // Update both position and originalPosition
+              const idx = particleIdx * 3
+              posAttr.array[idx] = vertex.x
+              posAttr.array[idx + 1] = vertex.y
+              posAttr.array[idx + 2] = vertex.z
+              
+              originalPosAttr.array[idx] = vertex.x
+              originalPosAttr.array[idx + 1] = vertex.y
+              originalPosAttr.array[idx + 2] = vertex.z
+            }
+          }
+        }
+        
+        posAttr.needsUpdate = true
+        originalPosAttr.needsUpdate = true
+      }
+    }
+    
     // Smooth interpolation for particle displacement (physics-based easing)
     if (interactive && geometry && velocitiesRef.current && pointsRef.current) {
       const displacementAttr = geometry.getAttribute('currentDisplacement') as THREE.BufferAttribute
@@ -491,10 +610,10 @@ export function VertexParticles({
 }
 
 /**
- * Example: OBJ Model with vertex particles
- * Demonstrates how to use VertexParticles with a loaded OBJ file
+ * GLB/GLTF Model with vertex particles
+ * Similar to OBJWithParticles but for GLB/GLTF files
  */
-export function OBJWithParticles({ 
+export function GLBWithParticles({ 
   modelPath,
   particleColor = '#00ffff',
   particleSize = 0.03,
@@ -516,7 +635,9 @@ export function OBJWithParticles({
   gradientColorEnd = '#0000ff',
   gradientAxis = 'y',
   gradientColors = null,
-  gradientBlendPower = 2.0
+  gradientBlendPower = 2.0,
+  playAnimation = true,
+  animationIndex = 0
 }: { 
   modelPath: string
   particleColor?: string
@@ -540,9 +661,12 @@ export function OBJWithParticles({
   gradientAxis?: 'x' | 'y' | 'z' | 'radial'
   gradientColors?: Array<{ color: string; position: [number, number, number] }> | null
   gradientBlendPower?: number
+  playAnimation?: boolean
+  animationIndex?: number
 }) {
   const groupRef = useRef<THREE.Group>(null)
-  const obj = useLoader(OBJLoader, modelPath)
+  const mixerRef = useRef<THREE.AnimationMixer | null>(null)
+  const gltf = useLoader(GLTFLoader, modelPath)
   
   // Simple material for the mesh
   const meshMaterial = useMemo(() => {
@@ -555,10 +679,38 @@ export function OBJWithParticles({
   }, [meshColor, meshOpacity])
 
   useEffect(() => {
-    if (obj && meshMaterial && showMesh) {
-      applyMaterialToObject(obj, meshMaterial, true)
+    if (gltf && meshMaterial && showMesh) {
+      applyMaterialToObject(gltf.scene, meshMaterial, true)
     }
-  }, [obj, meshMaterial, showMesh])
+  }, [gltf, meshMaterial, showMesh])
+
+  // Set up animations
+  useEffect(() => {
+    if (!gltf || !playAnimation) return
+
+    // Check if there are animations in the GLTF
+    if (gltf.animations && gltf.animations.length > 0) {
+      const mixer = new THREE.AnimationMixer(gltf.scene)
+      mixerRef.current = mixer
+
+      console.log(`Found ${gltf.animations.length} animations in GLB file:`, gltf.animations.map(a => a.name))
+
+      // Play the specified animation (or first one by default)
+      const clipIndex = Math.min(animationIndex, gltf.animations.length - 1)
+      const clip = gltf.animations[clipIndex]
+      const action = mixer.clipAction(clip)
+      
+      action.play()
+      console.log(`Playing animation: ${clip.name || `Animation ${clipIndex}`}`)
+
+      return () => {
+        mixer.stopAllAction()
+        mixerRef.current = null
+      }
+    } else {
+      console.log('No animations found in GLB file')
+    }
+  }, [gltf, playAnimation, animationIndex])
 
   // Apply external rotation if provided
   useEffect(() => {
@@ -567,8 +719,14 @@ export function OBJWithParticles({
     }
   }, [rotation])
 
-  // Auto-rotate animation (optional)
+  // Update animation mixer and auto-rotate
   useFrame((state, delta) => {
+    // Update animation mixer
+    if (mixerRef.current) {
+      mixerRef.current.update(delta)
+    }
+
+    // Auto-rotate (optional)
     if (groupRef.current && autoRotate && rotationSpeed > 0) {
       groupRef.current.rotation.y += delta * rotationSpeed
     }
@@ -576,9 +734,9 @@ export function OBJWithParticles({
 
   return (
     <group ref={groupRef}>
-      {showMesh && <primitive object={obj.clone()} />}
+      {showMesh && <primitive object={gltf.scene} />}
       <VertexParticles 
-        object={obj}
+        object={gltf.scene}
         particleColor={particleColor} 
         particleSize={particleSize}
         sampleRate={sampleRate}

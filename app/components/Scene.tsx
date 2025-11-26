@@ -3,7 +3,7 @@
 import { useState, useEffect, Suspense, useRef } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei'
-import { OBJWithParticles, VertexParticles } from './LightArray'
+import { GLBWithParticles, VertexParticles } from './LightArray'
 
 export default function Scene() {
   const [scrollY, setScrollY] = useState(0)
@@ -29,7 +29,7 @@ export default function Scene() {
       <Canvas>
         <PerspectiveCamera makeDefault position={[6, 5 , 7]} />
         <OrbitControls 
-          enabled={false}
+          enabled={true}
           enableDamping 
           dampingFactor={0.05}
           target={[0, 0, 0]}
@@ -41,30 +41,36 @@ export default function Scene() {
         <pointLight position={[-10, -10, -5]} intensity={0.5} />
         
         {/* 3D Objects - Rotation controlled by scroll */}
-        <group position={[0, -2, 0]} scale={0.009}>
+        <group position={[0, 1, 0]} scale={0.1}>
         <Suspense fallback={null}>
-          <OBJWithParticles 
-            modelPath="/cat.obj"
+          <GLBWithParticles 
+            modelPath="/cat_idle.glb"
             particleColor="#00ffff"
-            particleSize={0.1}         
+            meshColor="#F3F3F3"
+            meshOpacity={0.05}
+            particleSize={0.2}         
             sampleRate={1}             
             animated={true}           
-            showMesh={false}          
+            showMesh={true}          
             rotation={modelRotation}   
             autoRotate={false}
             interactive={true}
-            disperseRadius={7}
-            disperseStrength={120}
+            disperseRadius={6}
+            disperseStrength={10}
             returnSpeed={1.0}
             waveAmplitude={1}
             use3DGradient={true}
             gradientColors={[
-              { color: '#ff0000', position: [0, 0, 0] },      // Red - bottom-left-front
-              { color: '#00FF0D', position: [0, 1, 0] },      // Blue - top-left-front
-              { color: '#ff00ff', position: [0, 0, 1] },      // Magenta - bottom-left-back
-              { color: '#00ffff', position: [1, 0, 1] },      // Cyan - bottom-right-back
+              { color: '#ff0000', position: [0, 0, 0] },      //  bottom-left-front corner
+              { color: '#FF7300', position: [1, 0, 0] },      //  bottom-right-front corner
+              { color: '#00ffff', position: [0, 1, 0] },      //  top-left-front corner
+              { color: '#FF7300', position: [1, 1, 0] },      //  top-right-front corner
+              { color: '#ff00ff', position: [0, 0, 1] },      //  bottom-left-back corner
+              { color: '#00ffff', position: [1, 0, 1] },      //  bottom-right-back corner
             ]}
             gradientBlendPower={2.0}
+            playAnimation={true}
+            animationIndex={0}
           />
         </Suspense>
         </group>
